@@ -5,11 +5,13 @@ import (
 	"log"
 	"net"
 	"recap/lib"
+	"runtime"
 	"strconv"
 	"sync"
 )
 
 func main() {
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	relays, err := lib.GetRelays()
 
 	if err != nil {
@@ -50,13 +52,15 @@ func main() {
 		host, p, err := net.SplitHostPort(r.OrAddresses[0])
 		if err != nil {
 			log.Printf("wtf? %s", err)
+			continue
 		}
 
 		port, _ := strconv.Atoi(p)
 
 		tch <- lib.Target{
-			Host: host,
-			Port: port,
+			Host:    host,
+			Port:    port,
+			Retries: 5,
 		}
 	}
 

@@ -26,6 +26,9 @@ type Relays struct {
 type Target struct {
 	Host string
 	Port int
+
+	Retries int
+	Backoff func(r, m int) time.Duration
 }
 type Result struct {
 	Target Target
@@ -68,23 +71,43 @@ func Fingerprint(t Target, och chan Result) {
 
 	results := []string{}
 	for _, probe := range jarm.GetProbes(t.Host, t.Port) {
-		dialer := proxy.FromEnvironmentUsing(&net.Dialer{Timeout: time.Second * 30})
-		c, err := dialer.Dial("tcp", net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port)))
-		if err != nil {
-			och <- Result{Target: t, Error: err}
-			continue
+		dialer := proxy.FromEnvironmentUsing(&net.Dialer{Timeout: time.Second * 2})
+		addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
+
+		c := net.Conn(nil)
+		n := 0
+
+		for c == nil && n <= t.Retries {
+			// Ignoring error since error message was already being dropped.
+			// Also, if theres an error, c == nil.
+			if c, _ = dialer.Dial("tcp", addr); c != nil || t.Retries == 0 {
+				break
+			}
+
+			bo := t.Backoff
+			if bo == nil {
+				bo = DefaultBackoff
+			}
+
+			time.Sleep(bo(n, t.Retries))
+
+			n++
+		}
+
+		if c == nil {
+			return
 		}
 
 		data := jarm.BuildProbe(probe)
-		c.SetWriteDeadline(time.Now().Add(time.Second * 30))
-		_, err = c.Write(data)
+		c.SetWriteDeadline(time.Now().Add(time.Second * 5))
+		_, err := c.Write(data)
 		if err != nil {
 			results = append(results, "")
 			c.Close()
 			continue
 		}
 
-		c.SetReadDeadline(time.Now().Add(time.Second * 30))
+		c.SetReadDeadline(time.Now().Add(time.Second * 5))
 		buff := make([]byte, 1484)
 		c.Read(buff)
 		c.Close()
@@ -102,4 +125,8 @@ func Fingerprint(t Target, och chan Result) {
 		Target: t,
 		Hash:   jarm.RawHashToFuzzyHash(strings.Join(results, ",")),
 	}
+}
+
+var DefaultBackoff = func(r, m int) time.Duration {
+	return time.Second
 }
